@@ -51,8 +51,6 @@ class Gaussians:
 
     def get_bbox(self) -> jnp.ndarray:
         cov_mat = self.quat.as_matrix()
-        # cov_mat = jnp.einsum("...ij,...j,...kj->...ik", cov_mat, self.scale ** 2, cov_mat)
-        # extent = 3 * jnp.abs(cov_mat).max(axis=-1)
         extent = 3 * jnp.abs(cov_mat * self.scale[..., None, :]).max(axis=-1)
         bbox = jnp.concatenate([self.means - extent, self.means + extent], axis=-1)
         return bbox
