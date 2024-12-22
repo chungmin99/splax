@@ -1,5 +1,8 @@
 # Attempt at implementing rasterization using Warp's JAX support.
-# Note that `jax_kernel` does not provide autodiff by default.
+# Recall that warp, triton, etc is for writing faster CUDA code,
+# and does not provide autodiff by default.
+
+# TODO verify that the fwd/bwd is correct for small gaussians.
 
 import jax.numpy as jnp
 
@@ -10,6 +13,7 @@ from warp.jax_experimental import jax_kernel
 
 from ._gaussian_splat import Gaussians
 from ._camera import Camera
+from jax import custom_vjp
 
 
 def _rasterize_tile_warp(
@@ -19,6 +23,8 @@ def _rasterize_tile_warp(
     tile_size: int,
 ) -> jnp.ndarray:
     assert g2d.get_and_check_shape() == 2
+    assert len(g2d.get_batch_axes()) == 1
+
     inv_covs = jnp.einsum(
         "...ij,...j,...kj->...ik",
         g2d.quat.as_matrix(),
@@ -54,8 +60,50 @@ def _rasterize_tile_warp(
     return img
 
 
+@custom_vjp
+def _jax_rasterize_tile_kernel(
+    indices: jnp.ndarray,
+    means: jnp.ndarray,
+    colors: jnp.ndarray,
+    opacities: jnp.ndarray,
+    inv_covs: jnp.ndarray,
+    depth: jnp.ndarray,
+    bbox: jnp.ndarray,
+) -> jnp.ndarray:
+    return jax_kernel(_rasterize_tile_kernel_fwd)(
+        indices, means, colors, opacities, inv_covs, depth, bbox
+    )
+
+
+def _jax_rasterize_tile_kernel_fwd(
+    indices: jnp.ndarray,
+    means: jnp.ndarray,
+    colors: jnp.ndarray,
+    opacities: jnp.ndarray,
+    inv_covs: jnp.ndarray,
+    depth: jnp.ndarray,
+    bbox: jnp.ndarray,
+) -> tuple[jnp.ndarray, tuple]:
+    img = _jax_rasterize_tile_kernel(
+        indices, means, colors, opacities, inv_covs, depth, bbox
+    )
+    return img, (indices, means, colors, opacities, inv_covs, depth, bbox)
+
+
+def _jax_rasterize_tile_kernel_bwd(
+    res: tuple,
+    grads: jnp.ndarray,
+) -> tuple:
+    raise NotImplementedError("Backward pass not implemented.")
+
+
+_jax_rasterize_tile_kernel.defvjp(
+    _jax_rasterize_tile_kernel_fwd, _jax_rasterize_tile_kernel_bwd
+)
+
+
 @wp.kernel
-def _rasterize_tile_kernel(
+def _rasterize_tile_kernel_fwd(
     indices: wp.array3d(dtype=wp.vec2),  # (n_tiles, tile_size, tile_size, 2)
     means: wp.array(dtype=wp.vec2),
     colors: wp.array(dtype=wp.vec3),
@@ -76,13 +124,14 @@ def _rasterize_tile_kernel(
     trans[i, j, k] = 1.0
 
     for idx in range(means.shape[0]):
-        if depth[idx] <= 0.0:
-            continue
-
-        # Do the culling math here!
+        # Bounding box culling math.
         if bbox[idx][2] < indices[i, j, k][0] or bbox[idx][0] > indices[i, j, k][0]:
             continue
         if bbox[idx][3] < indices[i, j, k][1] or bbox[idx][1] > indices[i, j, k][1]:
+            continue
+
+        # Depth culling math.
+        if depth[idx] <= 0.0:
             continue
 
         mean = means[idx]
@@ -105,6 +154,3 @@ def _rasterize_tile_kernel(
     img[i, j, k][1] = wp.clamp(img[i, j, k][1], 0.0, 1.0)
     img[i, j, k][2] = wp.clamp(img[i, j, k][2], 0.0, 1.0)
     alpha[i, j, k] = wp.clamp(alpha[i, j, k], 0.0, 1.0)
-
-
-_jax_rasterize_tile_kernel = jax_kernel(_rasterize_tile_kernel)

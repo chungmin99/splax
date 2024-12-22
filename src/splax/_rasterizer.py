@@ -22,7 +22,7 @@ def rasterize(
     depth: jnp.ndarray,
     tile_size: jdc.Static[int] = 50,
     max_intersects: jdc.Static[int] = 100,
-    mode: jdc.Static[Literal["jax", "warp"]] = "warp",
+    mode: jdc.Static[Literal["jax", "warp"]] = "jax",
 ) -> jnp.ndarray:
     assert gaussians.get_and_check_shape() == 2
 

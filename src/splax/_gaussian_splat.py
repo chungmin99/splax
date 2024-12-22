@@ -38,6 +38,10 @@ class Gaussians:
     @property
     def opacity(self) -> jnp.ndarray:
         return jax.nn.sigmoid(self._opacity)
+    
+    def get_batch_axes(self) -> tuple[int, ...]:
+        self.get_and_check_shape()
+        return self.means.shape[:-1]
 
     def get_and_check_shape(self) -> int:
         n_dim = self.quat.space_dim
