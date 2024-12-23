@@ -28,6 +28,7 @@ def main():
 
     g2d, depth = camera.project(gaussians)
     target_img = rasterize(camera, g2d, depth)
+    plt.imsave("target.png", target_img)
 
     n_gauss = int(1e5)
     gaussians = Gaussian3D.from_random(n_gauss, jax.random.PRNGKey(1))
