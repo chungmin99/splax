@@ -1,31 +1,40 @@
 from __future__ import annotations
+from typing import ClassVar, Self
+
 import jax
 import jax_dataclasses as jdc
 import jaxlie
 
 import jax.numpy as jnp
 
+from ._utils import register_gs
+
 
 @jdc.pytree_dataclass
-class Gaussians:
+class _Gaussians:
     means: jnp.ndarray
     quat: jaxlie.SOBase
     _scale: jnp.ndarray
     _colors: jnp.ndarray
     _opacity: jnp.ndarray
 
-    @staticmethod
+    n_dim: ClassVar[int]
+
+    @classmethod
     def from_props(
+        cls,
         means: jnp.ndarray,
         quat: jaxlie.SOBase,
         scale: jnp.ndarray,
         colors: jnp.ndarray,
         opacity: jnp.ndarray,
-    ) -> Gaussians:
+    ) -> Self:
         _scale = jnp.log(scale)
         _colors = jax.scipy.special.logit(colors)
         _opacity = jax.scipy.special.logit(opacity)
-        return Gaussians(means, quat, _scale, _colors, _opacity)
+        gaussians = cls(means, quat, _scale, _colors, _opacity)
+        gaussians.verfify_shape()
+        return gaussians
 
     @property
     def scale(self) -> jnp.ndarray:
@@ -38,20 +47,20 @@ class Gaussians:
     @property
     def opacity(self) -> jnp.ndarray:
         return jax.nn.sigmoid(self._opacity)
-    
+
     def get_batch_axes(self) -> tuple[int, ...]:
-        self.get_and_check_shape()
+        self.verfify_shape()
         return self.means.shape[:-1]
 
-    def get_and_check_shape(self) -> int:
-        n_dim = self.quat.space_dim
+    def verfify_shape(self):
+        n_dim = self.n_dim
         batch_axes = self.means.shape[:-1]
         assert self.means.shape == (*batch_axes, n_dim)
         assert self._scale.shape == (*batch_axes, n_dim)
         assert self._colors.shape == (*batch_axes, 3)
         assert self._opacity.shape == batch_axes
         assert self.quat.get_batch_axes() == batch_axes
-        return n_dim
+        assert self.quat.space_dim == n_dim
 
     def get_bbox(self) -> jnp.ndarray:
         cov_mat = self.quat.as_matrix()
@@ -59,25 +68,50 @@ class Gaussians:
         bbox = jnp.concatenate([self.means - extent, self.means + extent], axis=-1)
         return bbox
 
-    @staticmethod
-    def from_random(n_gauss: int, prng_key: jax.Array, n_dim: int) -> Gaussians:
+    @classmethod
+    def from_random(cls, n_gauss: jdc.Static[int], prng_key: jax.Array) -> Self:
         keys = jax.random.split(prng_key, 5)
 
-        means = jax.random.uniform(keys[0], (n_gauss, n_dim), minval=-1.0, maxval=1.0)
-        scale = jax.random.uniform(keys[1], (n_gauss, n_dim), minval=0.01, maxval=0.1)
-        colors = jax.random.uniform(keys[2], (n_gauss, n_dim), minval=0, maxval=1)
+        means = jax.random.uniform(
+            keys[0], (n_gauss, cls.n_dim), minval=-1.0, maxval=1.0
+        )
+        scale = jax.random.uniform(
+            keys[1], (n_gauss, cls.n_dim), minval=0.01, maxval=0.1
+        )
+        colors = jax.random.uniform(keys[2], (n_gauss, 3), minval=0, maxval=1)
         opacity = jax.random.uniform(keys[3], (n_gauss,), minval=0.5, maxval=1)
 
-        if n_dim == 3:
+        if cls.n_dim == 3:
             SOBase = jaxlie.SO3
-        elif n_dim == 2:
+        elif cls.n_dim == 2:
             SOBase = jaxlie.SO2
         else:
-            raise ValueError(f"Unsupported space dimension: {n_dim}")
+            raise ValueError(f"Unsupported space dimension: {cls.n_dim}")
         quat = SOBase.sample_uniform(keys[4], (n_gauss,))
 
         _scale = jnp.log(scale)
         _colors = jax.scipy.special.logit(colors)
         _opacity = jax.scipy.special.logit(opacity)
 
-        return Gaussians(means, quat, _scale, _colors, _opacity)
+        gaussians = cls(means, quat, _scale, _colors, _opacity)
+        gaussians.verfify_shape()
+        return gaussians
+
+    @classmethod
+    def get_tangent_dim(cls) -> int:
+        return (
+            cls.quat.tangent_dim
+            + cls.n_dim  # means
+            + cls.n_dim  # scale
+            + 3  # colors
+            + 1  # opacity
+        )
+
+
+@register_gs(n_dim=3)
+@jdc.pytree_dataclass
+class Gaussian3D(_Gaussians): ...
+
+@register_gs(n_dim=2)
+@jdc.pytree_dataclass
+class Gaussian2D(_Gaussians): ...

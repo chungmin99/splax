@@ -6,7 +6,7 @@ import jax
 import jax_dataclasses as jdc
 import jax.numpy as jnp
 
-from ._gaussian_splat import Gaussians
+from ._gaussian_splat import Gaussian2D
 from ._camera import Camera
 
 try:
@@ -18,13 +18,13 @@ except ImportError:
 @jdc.jit
 def rasterize(
     camera: Camera,
-    gaussians: Gaussians,
+    gaussians: Gaussian2D,
     depth: jnp.ndarray,
     tile_size: jdc.Static[int] = 50,
     max_intersects: jdc.Static[int] = 100,
     mode: jdc.Static[Literal["jax", "warp"]] = "jax",
 ) -> jnp.ndarray:
-    assert gaussians.get_and_check_shape() == 2
+    gaussians.verfify_shape()
 
     if _rasterize_tile_warp is not None and mode == "warp":
         rasterize_fn = _rasterize_tile_warp
@@ -55,7 +55,7 @@ def rasterize(
 
 
 def _rasterize_tile_jax(
-    g2d: Gaussians,
+    g2d: Gaussian2D,
     camera: Camera,
     depth: jnp.ndarray,
     tile_size: jdc.Static[int],
@@ -70,27 +70,45 @@ def _rasterize_tile_jax(
         axis=-1,
     ).reshape(-1, 2)
     tiles = jnp.concatenate([tiles * tile_size, (tiles + 1) * tile_size], axis=-1)
+
+    intersections = _get_intersections(g2d, depth, tiles, max_intersects)
     rendered_tiles = jax.vmap(
-        lambda tile: _rasterize_tile_jax_fn(g2d, tile, depth, tile_size, max_intersects)
-    )(tiles)
+        lambda tile, intersection: _rasterize_tile_jax_fn(
+            g2d, tile, tile_size, intersection
+        )
+    )(tiles, intersections)
+
     return rendered_tiles
+
+
+def _get_intersections(
+    g2d: Gaussian2D,
+    depth: jnp.ndarray,
+    tiles: jnp.ndarray,
+    max_intersects: int,
+) -> jnp.ndarray:
+    def _get_intersection(tile):
+        bbox = g2d.get_bbox()
+        in_bounds = jnp.logical_and(
+            jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
+            jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
+        )
+        in_bounds = jnp.logical_and(in_bounds, depth > 0)
+
+        intersection = jnp.nonzero(in_bounds, size=max_intersects, fill_value=-1)[0]
+        return intersection
+    
+    intersections = jax.vmap(_get_intersection)(tiles)
+    return intersections
 
 
 @staticmethod
 def _rasterize_tile_jax_fn(
-    g2d: Gaussians,
+    g2d: Gaussian2D,
     tile: jnp.ndarray,
-    depth: jnp.ndarray,
     tile_size: jdc.Static[int],
-    max_intersects: jdc.Static[int],
+    intersection: jnp.ndarray,
 ) -> jnp.ndarray:
-    bbox = g2d.get_bbox()
-    in_bounds = jnp.logical_and(
-        jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
-        jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
-    )
-    in_bounds = jnp.logical_and(in_bounds, depth > 0)
-
     indices = jnp.stack(
         jnp.meshgrid(
             jnp.arange(tile_size) + tile[0],
@@ -99,7 +117,6 @@ def _rasterize_tile_jax_fn(
         axis=-1,
     )
 
-    intersection = jnp.nonzero(in_bounds, size=max_intersects, fill_value=-1)[0]
     inv_covs = jnp.einsum(
         "...ij,...j,...kj->...ik",
         g2d.quat.as_matrix(),
@@ -107,8 +124,7 @@ def _rasterize_tile_jax_fn(
         g2d.quat.as_matrix(),
     )
 
-    def get_alpha_and_color(idx):
-        curr_idx = intersection[idx]
+    def get_alpha_and_color(curr_idx):
         mean = g2d.means[curr_idx]
         color = g2d.colors[curr_idx]
         opacity = g2d.opacity[curr_idx]
@@ -119,7 +135,7 @@ def _rasterize_tile_jax_fn(
         _alpha = jnp.exp(exponent) * opacity
         return _alpha, color
 
-    alphas, colors = jax.vmap(get_alpha_and_color)(jnp.arange(max_intersects))
+    alphas, colors = jax.vmap(get_alpha_and_color)(intersection)
     trans = jnp.nancumprod(jnp.roll(1 - alphas, 1, axis=0).at[0].set(1.0), axis=0)
     img = jnp.sum(
         colors[..., None, None, :]

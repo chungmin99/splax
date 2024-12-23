@@ -6,7 +6,7 @@ import jax_dataclasses as jdc
 import jaxlie
 import jax.numpy as jnp
 
-from ._gaussian_splat import Gaussians
+from ._gaussian_splat import Gaussian2D, Gaussian3D
 
 
 @jdc.pytree_dataclass
@@ -63,12 +63,11 @@ class Camera:
         return J
 
     @jdc.jit
-    def project(self, gaussians: Gaussians) -> tuple[Gaussians, jnp.ndarray]:
+    def project(self, gaussians: Gaussian3D) -> tuple[Gaussian2D, jnp.ndarray]:
         """
         Project 3D Gaussians to 2D, and also return depth from camera.
         """
-        assert gaussians.get_and_check_shape() == 3
-        assert isinstance(gaussians.quat, jaxlie.SO3)
+        gaussians.verfify_shape()
 
         t = self.pose.inverse() @ gaussians.means
 
@@ -112,10 +111,9 @@ class Camera:
         scale, quat_d = jnp.linalg.eigh(cov_d)
         scale = jnp.sqrt(scale)
         quat_d = jaxlie.SO2.from_matrix(quat_d)
-        g2d = Gaussians.from_props(
+        g2d = Gaussian2D.from_props(
             mean_d, quat_d, scale, gaussians.colors, gaussians.opacity
         )
 
         depth = t[..., 2]
-        assert g2d.get_and_check_shape() == 2
         return g2d, depth

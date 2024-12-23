@@ -11,18 +11,18 @@ import jax.numpy as jnp
 import warp as wp
 from warp.jax_experimental import jax_kernel
 
-from ._gaussian_splat import Gaussians
+from ._gaussian_splat import Gaussian2D
 from ._camera import Camera
 from jax import custom_vjp
 
 
 def _rasterize_tile_warp(
-    g2d: Gaussians,
+    g2d: Gaussian2D,
     camera: Camera,
     depth: jnp.ndarray,
     tile_size: int,
 ) -> jnp.ndarray:
-    assert g2d.get_and_check_shape() == 2
+    assert g2d.verfify_shape() == 2
     assert len(g2d.get_batch_axes()) == 1
 
     inv_covs = jnp.einsum(
