@@ -106,7 +106,13 @@ class _Gaussians:
             + 3  # colors
             + 1  # opacity
         )
-
+    
+    def fix(self) -> Self:
+        with jdc.copy_and_mutate(self) as g:
+            g.quat = jax.tree.map(
+                lambda x: x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-6), g.quat
+            )
+        return g
 
 @register_gs(n_dim=3)
 @jdc.pytree_dataclass
