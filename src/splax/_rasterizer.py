@@ -17,10 +17,11 @@ except ImportError:
 
 @jdc.jit
 def rasterize(
-    camera: Camera,
     gaussians: Gaussian2D,
     depth: jnp.ndarray,
-    tile_size: jdc.Static[int] = 50,
+    img_height: jdc.Static[int],
+    img_width: jdc.Static[int],
+    tile_size: jdc.Static[int] = 40,
     max_intersects: jdc.Static[int] = 100,
     mode: jdc.Static[Literal["jax", "warp"]] = "jax",
 ) -> jnp.ndarray:
@@ -35,28 +36,29 @@ def rasterize(
             f"Incompatible mode and available rasterizers: {mode}, {_rasterize_tile_warp}"
         )
 
-    n_tiles_along_height = camera.height // tile_size
-    n_tiles_along_width = camera.width // tile_size
+    n_tiles_along_height = img_height // tile_size
+    n_tiles_along_width = img_width // tile_size
     num_tiles = n_tiles_along_height * n_tiles_along_width
 
-    img_tiles = rasterize_fn(gaussians, camera, depth, tile_size)
+    img_tiles = rasterize_fn(gaussians, img_height, img_width, depth, tile_size)
     assert img_tiles.shape == (num_tiles, tile_size, tile_size, 3)
 
     img = img_tiles.reshape(
-        camera.height // tile_size,
-        camera.width // tile_size,
+        img_height // tile_size,
+        img_width // tile_size,
         tile_size,
         tile_size,
         3,
     )
     img = img.transpose(0, 2, 1, 3, 4)
-    img = img.reshape(camera.height, camera.width, 3)
+    img = img.reshape(img_height, img_width, 3)
     return img
 
 
 def _rasterize_tile_jax(
     g2d: Gaussian2D,
-    camera: Camera,
+    img_height: jdc.Static[int],
+    img_width: jdc.Static[int],
     depth: jnp.ndarray,
     tile_size: jdc.Static[int],
     max_intersects: jdc.Static[int],
@@ -64,50 +66,45 @@ def _rasterize_tile_jax(
     assert max_intersects > 0
     tiles = jnp.stack(
         jnp.meshgrid(
-            jnp.arange(camera.width // tile_size),
-            jnp.arange(camera.height // tile_size),
+            jnp.arange(img_width // tile_size),
+            jnp.arange(img_height // tile_size),
         ),
         axis=-1,
     ).reshape(-1, 2)
     tiles = jnp.concatenate([tiles * tile_size, (tiles + 1) * tile_size], axis=-1)
 
-    intersections = _get_intersections(g2d, depth, tiles, max_intersects)
     rendered_tiles = jax.vmap(
-        lambda tile, intersection: _rasterize_tile_jax_fn(
-            g2d, tile, tile_size, intersection
+        lambda tile: _rasterize_tile_jax_fn(
+            g2d, tile, tile_size, depth, max_intersects
         )
-    )(tiles, intersections)
+    )(tiles)
 
     return rendered_tiles
 
 
-def _get_intersections(
+def _get_intersection(
     g2d: Gaussian2D,
     depth: jnp.ndarray,
-    tiles: jnp.ndarray,
+    tile: jnp.ndarray,
     max_intersects: int,
 ) -> jnp.ndarray:
-    def _get_intersection(tile):
-        bbox = g2d.get_bbox()
-        in_bounds = jnp.logical_and(
-            jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
-            jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
-        )
-        in_bounds = jnp.logical_and(in_bounds, depth > 0)
+    bbox = g2d.get_bbox()
+    in_bounds = jnp.logical_and(
+        jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
+        jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
+    )
+    in_bounds = jnp.logical_and(in_bounds, depth > 0)
 
-        intersection = jnp.nonzero(in_bounds, size=max_intersects, fill_value=-1)[0]
-        return intersection
-    
-    intersections = jax.vmap(_get_intersection)(tiles)
-    return intersections
+    intersection = jnp.nonzero(in_bounds, size=max_intersects, fill_value=-1)[0]
+    return intersection
 
 
-@staticmethod
 def _rasterize_tile_jax_fn(
     g2d: Gaussian2D,
     tile: jnp.ndarray,
     tile_size: jdc.Static[int],
-    intersection: jnp.ndarray,
+    depth: jnp.ndarray,
+    max_intersects: jdc.Static[int],
 ) -> jnp.ndarray:
     indices = jnp.stack(
         jnp.meshgrid(
@@ -116,6 +113,7 @@ def _rasterize_tile_jax_fn(
         ),
         axis=-1,
     )
+    intersection = _get_intersection(g2d, depth, tile, max_intersects)
 
     inv_covs = jnp.einsum(
         "...ij,...j,...kj->...ik",
