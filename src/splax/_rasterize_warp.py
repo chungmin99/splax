@@ -22,7 +22,6 @@ def _rasterize_tile_warp(
     depth: jnp.ndarray,
     tile_size: int,
 ) -> jnp.ndarray:
-    assert g2d.verfify_shape() == 2
     assert len(g2d.get_batch_axes()) == 1
 
     inv_covs = jnp.einsum(

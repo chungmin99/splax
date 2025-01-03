@@ -67,7 +67,7 @@ class Camera:
         """
         Project 3D Gaussians to 2D, and also return depth from camera.
         """
-        gaussians.verfify_shape()
+        gaussians.verify_shape()
 
         t = self.pose.inverse() @ gaussians.means
 

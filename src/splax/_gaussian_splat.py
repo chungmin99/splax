@@ -35,7 +35,7 @@ class _Gaussians:
         _colors = jax.scipy.special.logit(colors)
         _opacity = jax.scipy.special.logit(opacity)
         gaussians = cls(means, quat, _scale, _colors, _opacity)
-        gaussians.verfify_shape()
+        gaussians.verify_shape()
         return gaussians
 
     @property
@@ -51,10 +51,10 @@ class _Gaussians:
         return jax.nn.sigmoid(self._opacity)
 
     def get_batch_axes(self) -> tuple[int, ...]:
-        self.verfify_shape()
+        self.verify_shape()
         return self.means.shape[:-1]
 
-    def verfify_shape(self):
+    def verify_shape(self):
         n_dim = self.n_dim
         batch_axes = self.means.shape[:-1]
         assert self.means.shape == (*batch_axes, n_dim)
@@ -90,7 +90,7 @@ class _Gaussians:
         _opacity = jax.scipy.special.logit(opacity)
 
         gaussians = cls(means, quat, _scale, _colors, _opacity)
-        gaussians.verfify_shape()
+        gaussians.verify_shape()
         return gaussians
 
     def fix(self) -> Self:

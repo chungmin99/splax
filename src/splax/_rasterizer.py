@@ -24,7 +24,7 @@ def rasterize(
     max_intersects: jdc.Static[int] = 100,
     mode: jdc.Static[Literal["jax", "warp"]] = "jax",
 ) -> jnp.ndarray:
-    gaussians.verfify_shape()
+    gaussians.verify_shape()
 
     if _rasterize_tile_warp is not None and mode == "warp":
         rasterize_fn = _rasterize_tile_warp
