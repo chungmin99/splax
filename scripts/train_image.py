@@ -1,4 +1,4 @@
-from typing import cast, Literal
+from typing import cast, Literal, Union
 from pathlib import Path
 import matplotlib.pyplot as plt
 import tqdm
@@ -14,7 +14,9 @@ import optax
 from splax import Gaussian2D, rasterize
 
 @jdc.jit
-def normalize_to_image_space(g2d: Gaussian2D, height: jdc.Static[int], width: jdc.Static[int]) -> Gaussian2D:
+def normalize_to_image_space(
+    g2d: Gaussian2D, height: jdc.Static[int], width: jdc.Static[int]
+) -> Gaussian2D:
     with jdc.copy_and_mutate(g2d) as _g2d:
         _g2d.means = (g2d.means + 1) * jnp.array([width, height]) / 2
         _g2d._scale = jnp.log(g2d.scale * width)
@@ -30,11 +32,11 @@ def main(
     """
     if scene == "miffy":
         target_img = plt.imread(Path(__file__).parent / "assets/miffy.jpeg")
-        target_img = jax.image.resize(target_img, (1000, 1000, 3), method='bilinear')
+        target_img = jax.image.resize(target_img, (1000, 1000, 3), method="bilinear")
 
     elif scene == "sunset":
         target_img = plt.imread(Path(__file__).parent / "assets/sunset.jpeg")
-        target_img = jax.image.resize(target_img, (1080, 1920, 3), method='bilinear')
+        target_img = jax.image.resize(target_img, (1080, 1920, 3), method="bilinear")
 
     target_img = target_img / 255.0
     height, width, _ = target_img.shape
@@ -43,11 +45,9 @@ def main(
     g2d = Gaussian2D.from_random(n_gauss, prng_key)
 
     img = rasterize(g2d, jnp.arange(n_gauss), height, width)
-
+    
     @jdc.jit
     def loss_fn(g2d):
-        _g2d = normalize_to_image_space(g2d, height, width)
-        img = rasterize(_g2d, jnp.arange(n_gauss), height, width)
         loss = jnp.abs(img - target_img).mean()
         return loss
 
@@ -70,13 +70,12 @@ def main(
         g2d, opt_state, loss = step_fn(g2d, opt_state)
         pbar.set_postfix(loss=f"{loss.item():.6f}")
         if step % 20 == 0:
-            _g2d = normalize_to_image_space(g2d, height, width)
-            img = rasterize(_g2d, jnp.arange(n_gauss), height, width)
             result_imgs.append(img)
-    
+
     # Save the result images as a gif.
     result_imgs = [onp.array(img * 255, dtype=onp.uint8) for img in result_imgs]
-    imageio.mimsave(f"{scene}_result.gif", result_imgs, fps=10, format="GIF")  # pyright: ignore
+    imageio.mimsave(f"{scene}_result.gif", result_imgs, fps=10, format="GIF", loop=0)  # pyright: ignore
+
 
 if __name__ == "__main__":
     tyro.cli(main)
