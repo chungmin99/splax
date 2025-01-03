@@ -18,7 +18,9 @@ class _Gaussians:
     _colors: jnp.ndarray
     _opacity: jnp.ndarray
 
-    n_dim: ClassVar[int]
+    n_dim: ClassVar[jdc.Static[int]]
+    rot_type: ClassVar[jdc.Static[type[jaxlie.SOBase]]]
+    tangent_dim: ClassVar[jdc.Static[int]]
 
     @classmethod
     def from_props(
@@ -81,13 +83,7 @@ class _Gaussians:
         colors = jax.random.uniform(keys[2], (n_gauss, 3), minval=0, maxval=1)
         opacity = jax.random.uniform(keys[3], (n_gauss,), minval=0.5, maxval=1)
 
-        if cls.n_dim == 3:
-            SOBase = jaxlie.SO3
-        elif cls.n_dim == 2:
-            SOBase = jaxlie.SO2
-        else:
-            raise ValueError(f"Unsupported space dimension: {cls.n_dim}")
-        quat = SOBase.sample_uniform(keys[4], (n_gauss,))
+        quat = cls.rot_type.sample_uniform(keys[4], (n_gauss,))
 
         _scale = jnp.log(scale)
         _colors = jax.scipy.special.logit(colors)
@@ -97,16 +93,6 @@ class _Gaussians:
         gaussians.verfify_shape()
         return gaussians
 
-    @classmethod
-    def get_tangent_dim(cls) -> int:
-        return (
-            cls.quat.tangent_dim
-            + cls.n_dim  # means
-            + cls.n_dim  # scale
-            + 3  # colors
-            + 1  # opacity
-        )
-    
     def fix(self) -> Self:
         with jdc.copy_and_mutate(self) as g:
             g.quat = jax.tree.map(
@@ -114,10 +100,14 @@ class _Gaussians:
             )
         return g
 
-@register_gs(n_dim=3)
+    # @staticmethod
+    # def retract_fn(g: _Gaussians, delta: jax.Array) -> _Gaussians:
+    #     pass
+
+@register_gs(n_dim=3, rot_type=jaxlie.SO3)
 @jdc.pytree_dataclass
 class Gaussian3D(_Gaussians): ...
 
-@register_gs(n_dim=2)
+@register_gs(n_dim=2, rot_type=jaxlie.SO2)
 @jdc.pytree_dataclass
 class Gaussian2D(_Gaussians): ...
