@@ -80,8 +80,10 @@ class _Gaussians:
         scale = jax.random.uniform(
             keys[1], (n_gauss, cls.n_dim), minval=0.01, maxval=0.1
         )
-        colors = jax.random.uniform(keys[2], (n_gauss, 3), minval=0, maxval=1)
-        opacity = jax.random.uniform(keys[3], (n_gauss,), minval=0.5, maxval=1)
+
+        eps = 1e-6
+        colors = jax.random.uniform(keys[2], (n_gauss, 3), minval=eps, maxval=(1 - eps))
+        opacity = jax.random.uniform(keys[3], (n_gauss,), minval=0.5, maxval=(1 - eps))
 
         quat = cls.rot_type.sample_uniform(keys[4], (n_gauss,))
 
