@@ -24,8 +24,8 @@ def main(
     gaussians = Gaussian3D.from_random(n_gauss, jax.random.PRNGKey(1))
 
     g2d, depth = camera.project(gaussians)
-    target_img = rasterize(camera, g2d, depth, mode=mode)
-    plt.imsave("rast_random.png", target_img)
+    img = rasterize(g2d, depth, img_width=width, img_height=height)
+    plt.imsave("rast_random.png", img)
 
     means = jnp.array([[0, 0, 0]])
     scale = jnp.array([[1, 1, 1]])
@@ -35,7 +35,7 @@ def main(
     gaussians = Gaussian3D.from_props(means, quat, scale, colors, opacity)
 
     g2d, depth = camera.project(gaussians)
-    target_img = rasterize(camera, g2d, depth, mode=mode)
+    target_img = rasterize(g2d, depth, img_width=width, img_height=height, mode=mode)
     plt.imsave("rast_red_circle.png", target_img)
 
 
