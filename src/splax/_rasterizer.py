@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import Literal
 from functools import partial
 
@@ -36,22 +37,27 @@ def rasterize(
             f"Incompatible mode and available rasterizers: {mode}, {_rasterize_tile_warp}"
         )
 
-    n_tiles_along_height = img_height // tile_size
-    n_tiles_along_width = img_width // tile_size
+    n_tiles_along_height = math.ceil(img_height / tile_size)
+    n_tiles_along_width = math.ceil(img_width / tile_size)
+    img_height_padded = n_tiles_along_height * tile_size
+    img_width_padded = n_tiles_along_width * tile_size
     num_tiles = n_tiles_along_height * n_tiles_along_width
 
-    img_tiles = rasterize_fn(gaussians, img_height, img_width, depth, tile_size)
+    img_tiles = rasterize_fn(
+        gaussians, img_height_padded, img_width_padded, depth, tile_size
+    )
     assert img_tiles.shape == (num_tiles, tile_size, tile_size, 3)
 
     img = img_tiles.reshape(
-        img_height // tile_size,
-        img_width // tile_size,
+        n_tiles_along_height,
+        n_tiles_along_width,
         tile_size,
         tile_size,
         3,
     )
     img = img.transpose(0, 2, 1, 3, 4)
-    img = img.reshape(img_height, img_width, 3)
+    img = img.reshape(img_height_padded, img_width_padded, 3)
+    img = img[:img_height, :img_width]
     return img
 
 
