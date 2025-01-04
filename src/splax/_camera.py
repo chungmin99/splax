@@ -22,6 +22,33 @@ class Camera:
     pose: jaxlie.SE3
 
     @staticmethod
+    def from_K_and_viewmat(
+        K: jnp.ndarray,
+        T_cam_world: jnp.ndarray,
+        width: jdc.Static[int],
+        height: jdc.Static[int],
+        near: Optional[jnp.ndarray] = None,
+        far: Optional[jnp.ndarray] = None,
+    ) -> Camera:
+        batch_axes = K.shape[:-2]
+        assert K.shape[:-2] == T_cam_world.shape[:-2]
+        assert K.shape[-2:] == (3, 3)
+        assert T_cam_world.shape[-2:] == (4, 4)
+
+        if near is None:
+            near = jnp.full(batch_axes, 0.1)
+        if far is None:
+            far = jnp.full(batch_axes, 1000.0)
+
+        fx = K[..., 0, 0]
+        fy = K[..., 1, 1]
+        cx = K[..., 0, 2]
+        cy = K[..., 1, 2]
+        pose = jaxlie.SE3.from_matrix(T_cam_world)
+
+        return Camera(fx, fy, cx, cy, near, far, width, height, pose)
+
+    @staticmethod
     def from_intrinsics(
         fx: jnp.ndarray,
         fy: jnp.ndarray,
