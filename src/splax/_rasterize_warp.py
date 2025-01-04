@@ -12,13 +12,13 @@ import warp as wp
 from warp.jax_experimental import jax_kernel
 
 from ._gaussian_splat import Gaussian2D
-from ._camera import Camera
 from jax import custom_vjp
 
 
 def _rasterize_tile_warp(
     g2d: Gaussian2D,
-    camera: Camera,
+    img_height: int,
+    img_width: int,
     depth: jnp.ndarray,
     tile_size: int,
 ) -> jnp.ndarray:
@@ -32,13 +32,13 @@ def _rasterize_tile_warp(
     )
     bbox = g2d.get_bbox()
 
-    n_tile_h = camera.height // tile_size
-    n_tile_w = camera.width // tile_size
+    n_tile_h = img_height // tile_size
+    n_tile_w = img_width // tile_size
     indices = (
         jnp.stack(
             jnp.meshgrid(
-                jnp.arange(camera.height, dtype=jnp.float32),
-                jnp.arange(camera.width, dtype=jnp.float32),
+                jnp.arange(img_width, dtype=jnp.float32),
+                jnp.arange(img_height, dtype=jnp.float32),
             ),
             axis=-1,
         )
