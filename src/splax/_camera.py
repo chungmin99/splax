@@ -1,7 +1,6 @@
 from __future__ import annotations
 from typing import Optional
 
-import jax
 import jax_dataclasses as jdc
 import jaxlie
 import jax.numpy as jnp
@@ -82,6 +81,7 @@ class Camera:
 
     def affine_transform_jacobian(self, t: jnp.ndarray) -> jnp.ndarray:
         batch_axes = t.shape[:-1]
+        t = t.at[..., 2].add(1e-6)  # For numerical stability.
         J = jnp.zeros((*batch_axes, 2, 3))
         J = J.at[..., 0, 0].set(self.fx / t[..., 2])
         J = J.at[..., 1, 1].set(self.fy / t[..., 2])
@@ -100,7 +100,7 @@ class Camera:
 
         # If depth ~ 0, then projection to `t_d` becomes numerically unstable.
         # Setting to arbitrary position is OK since we won't render if depth < 0.
-        t = jnp.where(t[..., 2:] < 1e-6, jnp.ones_like(t) * -1e-6, t)
+        t = jnp.where(t[..., 2:] < 1e-6, jnp.ones_like(t) * -1, t)
 
         t_d = jnp.einsum(
             "...ij,...j->...i",
@@ -110,8 +110,8 @@ class Camera:
 
         mean_d = jnp.array(
             [
-                (self.width * t_d[..., 0] / (t_d[..., -1]) + 1) / 2 + self.cx,
-                (self.height * t_d[..., 1] / (t_d[..., -1]) + 1) / 2 + self.cy,
+                (self.width * t_d[..., 0] / (t_d[..., -1] + 1e-6) + 1) / 2 + self.cx,
+                (self.height * t_d[..., 1] / (t_d[..., -1] + 1e-6) + 1) / 2 + self.cy,
             ]
         ).T
 
@@ -134,9 +134,18 @@ class Camera:
             J.swapaxes(-1, -2),
         )
 
+        # For numerical stability.
+        cov_d = cov_d.clip(-1e6, 1e6)
+
         # Store covariance as scale and quaternion.
         scale, quat_d = jnp.linalg.eigh(cov_d)
-        scale = jnp.sqrt(scale)
+
+        # Clip scale to prevent spurious negative values.
+        # Also, this is 2D scale, so <1 means less than 1 pixel!
+        scale = jnp.clip(scale, min=0.1)
+
+        scale = jnp.sqrt(scale + 1e-6)  # For numerical stability.
+
         quat_d = jaxlie.SO2.from_matrix(quat_d)
         g2d = Gaussian2D.from_props(
             mean_d, quat_d, scale, gaussians.colors, gaussians.opacity
