@@ -50,6 +50,21 @@ class _Gaussians:
     def opacity(self) -> jnp.ndarray:
         return jax.nn.sigmoid(self._opacity)
 
+    @scale.setter
+    def scale(self, value: jnp.ndarray):
+        value = jnp.clip(value, min=1e-6)
+        self._scale = jnp.log(value)
+
+    @colors.setter
+    def colors(self, value: jnp.ndarray):
+        value = jnp.clip(value, 1e-6, 1 - 1e-6)
+        self._colors = jax.scipy.special.logit(value)
+
+    @opacity.setter
+    def opacity(self, value: jnp.ndarray):
+        value = jnp.clip(value, 1e-6, 1 - 1e-6)
+        self._opacity = jax.scipy.special.logit(value)
+
     def get_batch_axes(self) -> tuple[int, ...]:
         self.verify_shape()
         return self.means.shape[:-1]
@@ -98,7 +113,8 @@ class _Gaussians:
     def fix(self) -> Self:
         with jdc.copy_and_mutate(self) as g:
             g.quat = jax.tree.map(
-                lambda x: x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-6), g.quat
+                lambda x: x / (jnp.linalg.norm(x, axis=-1, keepdims=True) + 1e-6),
+                g.quat,
             )
         return g
 
@@ -106,9 +122,11 @@ class _Gaussians:
     # def retract_fn(g: _Gaussians, delta: jax.Array) -> _Gaussians:
     #     pass
 
+
 @register_gs(n_dim=3, rot_type=jaxlie.SO3)
 @jdc.pytree_dataclass
 class Gaussian3D(_Gaussians): ...
+
 
 @register_gs(n_dim=2, rot_type=jaxlie.SO2)
 @jdc.pytree_dataclass
