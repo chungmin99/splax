@@ -49,6 +49,17 @@ class _Gaussians:
     @property
     def opacity(self) -> jnp.ndarray:
         return jax.nn.sigmoid(self._opacity)
+    
+    @property
+    def cov(self) -> jnp.ndarray:
+        R = self.quat.as_matrix()
+        cov = jnp.einsum(
+            "...ij,...j,...jm->...im",
+            R,
+            jnp.diag(self.scale**2),
+            R.swapaxes(-1, -2),
+        )
+        return cov
 
     @scale.setter
     def scale(self, value: jnp.ndarray):
