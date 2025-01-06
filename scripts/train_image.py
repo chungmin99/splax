@@ -18,8 +18,8 @@ from splax import Gaussian2D, Gaussian3D, rasterize, Camera, compute_ssim
 def main(
     n_gauss: int = int(1e5),
     n_steps: int = 1000,
-    scene: Literal["miffy", "sunset", "sunset_1080p"] = "sunset",
-    mode: Literal["2D", "3D"] = "2D",
+    scene: Literal["miffy", "sunset", "sunset_1080p", "red_blue"] = "miffy",
+    mode: Literal["2D", "3D"] = "3D",
     train_mode: Literal["default", "mcmc"] = "default",
 ):
     """
@@ -30,7 +30,7 @@ def main(
     """
     if scene == "miffy":
         target_img = plt.imread(Path(__file__).parent / "assets/miffy.jpeg")
-        target_img = jax.image.resize(target_img, (1000, 1000, 3), method="bilinear")
+        target_img = jax.image.resize(target_img, (500, 500, 3), method="bilinear")
 
     elif scene == "sunset":
         target_img = plt.imread(Path(__file__).parent / "assets/sunset.jpeg")
@@ -38,6 +38,15 @@ def main(
     elif scene == "sunset_1080p":
         target_img = plt.imread(Path(__file__).parent / "assets/sunset.jpeg")
         target_img = jax.image.resize(target_img, (1080, 1920, 3), method="bilinear")
+    
+    elif scene == "red_blue":
+        target_img = jnp.full((256, 256, 3), 255)
+        target_img = target_img.at[: target_img.shape[0] // 2, : target_img.shape[1]//2].set(
+            jnp.array([255, 0, 0])
+        )
+        target_img = target_img.at[target_img.shape[0] // 2 :, target_img.shape[1]//2 :].set(
+            jnp.array([0, 0, 255])
+        )
 
     target_img = target_img / 255.0
     height, width, _ = target_img.shape
@@ -57,7 +66,7 @@ def main(
         cx = cy = jnp.array(width / 2)
         near = jnp.array(0.1)
         far = jnp.array(1000.0)
-        pose = jaxlie.SE3.from_translation(jnp.array([0, 0, -1.5]))
+        pose = jaxlie.SE3.from_translation(jnp.array([0, 0, -2.0]))
         camera = Camera.from_intrinsics(fx, fy, cx, cy, width, height, near, far, pose)
         gaussians = Gaussian3D.from_random(n_gauss, prng_key)
 
@@ -72,8 +81,13 @@ def main(
     @jdc.jit
     def loss_fn(gaussians):
         img = rasterize_gs(gaussians)
-        loss = 0.8 * jnp.abs(img - target_img).mean()
-        loss = 0.2 * (1 - compute_ssim(img, target_img))
+
+        if scene == "red_blue":
+            # Loss used in `image_fitting.py` in `gsplat`.
+            loss = jnp.mean((img - target_img) ** 2)
+        else:
+            loss = 0.8 * jnp.abs(img - target_img).mean()
+            loss = 0.2 * (1 - compute_ssim(img, target_img))
 
         # Add scale + opacity regularization for MCMC.
         if train_mode == "mcmc":
