@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 
+import jax
 import jax_dataclasses as jdc
 import jaxlie
 import jax.numpy as jnp
@@ -100,6 +101,7 @@ class Camera:
 
         # If depth ~ 0, then projection to `t_d` becomes numerically unstable.
         # Setting to arbitrary position is OK since we won't render if depth < 0.
+        depth = t[..., 2]
         t = jnp.where(t[..., 2:] < 1e-6, jnp.ones_like(t) * -1, t)
 
         t_d = jnp.einsum(
@@ -151,5 +153,7 @@ class Camera:
             mean_d, quat_d, scale, gaussians.colors, gaussians.opacity
         )
 
-        depth = t[..., 2]
+        sorted_indices = jnp.argsort(depth, axis=-1)
+        g2d = jax.tree.map(lambda x: x[sorted_indices], g2d)
+        depth = depth[sorted_indices]
         return g2d, depth
