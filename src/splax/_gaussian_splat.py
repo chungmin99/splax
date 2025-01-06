@@ -31,6 +31,10 @@ class _Gaussians:
         colors: jnp.ndarray,
         opacity: jnp.ndarray,
     ) -> Self:
+        scale = jnp.clip(scale, 1e-6)
+        colors = jnp.clip(colors, 1e-6, 1 - 1e-6)
+        opacity = jnp.clip(opacity, 1e-6, 1 - 1e-6)
+
         _scale = jnp.log(scale)
         _colors = jax.scipy.special.logit(colors)
         _opacity = jax.scipy.special.logit(opacity)
