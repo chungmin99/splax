@@ -4,6 +4,7 @@
 
 # TODO verify that the fwd/bwd is correct for small gaussians.
 
+import jax_dataclasses as jdc
 import jax.numpy as jnp
 
 # Note that default `wp.launch` doesn't work with JAX jitting.
@@ -17,10 +18,9 @@ from jax import custom_vjp
 
 def _rasterize_tile_warp(
     g2d: Gaussian2D,
-    img_height: int,
-    img_width: int,
-    depth: jnp.ndarray,
+    tile: jnp.ndarray,
     tile_size: int,
+    depth: jnp.ndarray,
 ) -> jnp.ndarray:
     assert len(g2d.get_batch_axes()) == 1
 
@@ -32,19 +32,14 @@ def _rasterize_tile_warp(
     )
     bbox = g2d.get_bbox()
 
-    n_tile_h = img_height // tile_size
-    n_tile_w = img_width // tile_size
     indices = (
         jnp.stack(
             jnp.meshgrid(
-                jnp.arange(img_width, dtype=jnp.float32),
-                jnp.arange(img_height, dtype=jnp.float32),
+                jnp.arange(tile_size, dtype=jnp.float32) + tile[0],
+                jnp.arange(tile_size, dtype=jnp.float32) + tile[1],
             ),
             axis=-1,
         )
-        .reshape(n_tile_h, tile_size, n_tile_w, tile_size, 2)
-        .transpose(0, 2, 1, 3, 4)
-        .reshape(n_tile_h * n_tile_w, tile_size, tile_size, 2)
     )
     output = _jax_rasterize_tile_kernel(
         indices,
@@ -74,6 +69,7 @@ def _jax_rasterize_tile_kernel(
     )
 
 
+@jdc.jit
 def _jax_rasterize_tile_kernel_fwd(
     indices: jnp.ndarray,
     means: jnp.ndarray,
@@ -89,10 +85,23 @@ def _jax_rasterize_tile_kernel_fwd(
     return img, (indices, means, colors, opacities, inv_covs, depth, bbox)
 
 
+@jdc.jit
 def _jax_rasterize_tile_kernel_bwd(
     res: tuple,
-    grads: jnp.ndarray,
+    grads: tuple,
 ) -> tuple:
+    indices, means, colors, opacities, inv_covs, depth, bbox = res
+    img_grad, alpha_grad, trans_grad = grads
+    # return (indices, means, colors, opacities, inv_covs, depth, bbox)
+    return (
+        jnp.zeros_like(indices),
+        jnp.zeros_like(means),
+        jnp.zeros_like(colors),
+        jnp.zeros_like(opacities),
+        jnp.zeros_like(inv_covs),
+        jnp.zeros_like(depth),
+        jnp.zeros_like(bbox),
+    )
     raise NotImplementedError("Backward pass not implemented.")
 
 
@@ -103,7 +112,7 @@ _jax_rasterize_tile_kernel.defvjp(
 
 @wp.kernel
 def _rasterize_tile_kernel_fwd(
-    indices: wp.array3d(dtype=wp.vec2),  # (n_tiles, tile_size, tile_size, 2)
+    indices: wp.array2d(dtype=wp.vec2),  # (tile_size, tile_size, 2)
     means: wp.array(dtype=wp.vec2),
     colors: wp.array(dtype=wp.vec3),
     opacities: wp.array(dtype=wp.float32),
@@ -111,22 +120,22 @@ def _rasterize_tile_kernel_fwd(
     depth: wp.array(dtype=wp.float32),
     bbox: wp.array(dtype=wp.vec4),
     *,
-    img: wp.array3d(dtype=wp.vec3),
-    alpha: wp.array3d(dtype=wp.float32),
-    trans: wp.array3d(dtype=wp.float32),
+    img: wp.array2d(dtype=wp.vec3),
+    alpha: wp.array2d(dtype=wp.float32),
+    trans: wp.array2d(dtype=wp.float32),
 ):
     # Rasterize gaussians per-pixel.
-    i, j, k = wp.tid()
+    i, j = wp.tid()
 
-    img[i, j, k] = wp.vec3(0.0, 0.0, 0.0)
-    alpha[i, j, k] = 0.0
-    trans[i, j, k] = 1.0
+    img[i, j] = wp.vec3(0.0, 0.0, 0.0)
+    alpha[i, j] = 0.0
+    trans[i, j] = 1.0
 
     for idx in range(means.shape[0]):
         # Bounding box culling math.
-        if bbox[idx][2] < indices[i, j, k][0] or bbox[idx][0] > indices[i, j, k][0]:
+        if bbox[idx][2] < indices[i, j][0] or bbox[idx][0] > indices[i, j][0]:
             continue
-        if bbox[idx][3] < indices[i, j, k][1] or bbox[idx][1] > indices[i, j, k][1]:
+        if bbox[idx][3] < indices[i, j][1] or bbox[idx][1] > indices[i, j][1]:
             continue
 
         # Depth culling math.
@@ -138,18 +147,18 @@ def _rasterize_tile_kernel_fwd(
         opacity = opacities[idx]
         inv_cov = inv_covs[idx]
 
-        diff = indices[i, j, k] - mean
+        diff = indices[i, j] - mean
         exponent = -0.5 * wp.dot(diff, wp.mul(inv_cov, diff))
         _alpha = wp.exp(exponent) * opacity
 
-        img[i, j, k] += color * _alpha * trans[i, j, k]
-        alpha[i, j, k] += _alpha
-        trans[i, j, k] *= 1.0 - _alpha
+        img[i, j] += color * _alpha * trans[i, j]
+        alpha[i, j] += _alpha
+        trans[i, j] *= 1.0 - _alpha
 
-        if trans[i, j, k] < 1e-6:
+        if trans[i, j] < 1e-6:
             break
 
-    img[i, j, k][0] = wp.clamp(img[i, j, k][0], 0.0, 1.0)
-    img[i, j, k][1] = wp.clamp(img[i, j, k][1], 0.0, 1.0)
-    img[i, j, k][2] = wp.clamp(img[i, j, k][2], 0.0, 1.0)
-    alpha[i, j, k] = wp.clamp(alpha[i, j, k], 0.0, 1.0)
+    img[i, j][0] = wp.clamp(img[i, j][0], 0.0, 1.0)
+    img[i, j][1] = wp.clamp(img[i, j][1], 0.0, 1.0)
+    img[i, j][2] = wp.clamp(img[i, j][2], 0.0, 1.0)
+    alpha[i, j] = wp.clamp(alpha[i, j], 0.0, 1.0)
