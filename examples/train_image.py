@@ -16,17 +16,23 @@ from splax import Gaussian2D, Gaussian3D, rasterize, Camera, compute_ssim
 
 
 def main(
-    n_gauss: int = int(1e5),
+    n_gauss: int = int(1e6),
     n_steps: int = 1000,
     scene: Literal["miffy", "sunset", "sunset_1080p", "red_blue"] = "miffy",
     mode: Literal["2D", "3D"] = "3D",
     train_mode: Literal["default", "mcmc"] = "default",
+    use_global_priority: bool = False,
 ):
     """
     Simple gaussian splat optimization in image space.
 
     Can optimize as "2D" (3D gaussians in SE2, with pre-determined rasterization ordering),
     or as "3D" (3D gaussians in SE3, with perspective projection).
+
+    Args:
+        use_global_priority: If True, use global priority ordering for gaussian
+            selection. This ensures consistent selection across adjacent tiles,
+            reducing tile-boundary artifacts when max_intersects is limiting.
     """
     if scene == "miffy":
         target_img = plt.imread(Path(__file__).parent / "assets/miffy.jpeg")
@@ -58,7 +64,10 @@ def main(
 
         def rasterize_gs(gs):
             _gs = normalize_to_image_space(gs, height, width)
-            img = rasterize(_gs, jnp.arange(n_gauss), height, width)
+            img = rasterize(
+                _gs, jnp.arange(n_gauss), height, width,
+                use_global_priority=use_global_priority,
+            )
             return img
 
     elif mode == "3D":
@@ -72,7 +81,13 @@ def main(
 
         def rasterize_gs(gs):
             _gs_2d, depth = camera.project(gs)
-            img = rasterize(_gs_2d, depth, height, width)
+            # Use opacity-based selection for better handling of max_intersects limit
+            # use_global_priority ensures consistent selection across adjacent tiles
+            img = rasterize(
+                _gs_2d, depth, height, width,
+                select_by_opacity=True,
+                use_global_priority=use_global_priority,
+            )
             return img
 
     else:

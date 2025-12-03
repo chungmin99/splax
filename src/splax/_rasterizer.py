@@ -25,7 +25,27 @@ def rasterize(
     tile_size: jdc.Static[int] = 40,
     max_intersects: jdc.Static[int] = 100,
     mode: jdc.Static[Literal["jax", "warp"]] = "jax",
+    select_by_opacity: jdc.Static[bool] = False,
+    use_global_priority: jdc.Static[bool] = False,
 ) -> jnp.ndarray:
+    """Rasterize 2D gaussians to an image.
+
+    Args:
+        gaussians: 2D gaussians to render
+        depth: Depth values for each gaussian
+        img_height: Output image height
+        img_width: Output image width
+        tile_size: Size of each tile (default 40)
+        max_intersects: Maximum gaussians per tile (default 100)
+        mode: Rasterization backend ("jax" or "warp")
+        select_by_opacity: If True, prioritize high-opacity gaussians (per-tile)
+        use_global_priority: If True, use global priority ordering to ensure
+            consistent gaussian selection across adjacent tiles, reducing
+            tile-boundary artifacts when max_intersects is limiting.
+
+    Returns:
+        Rendered image of shape (img_height, img_width, 3)
+    """
     gaussians.verify_shape()
 
     n_tiles_along_height = math.ceil(img_height / tile_size)
@@ -54,6 +74,13 @@ def rasterize(
     elif mode == "jax":
         assert max_intersects > 0
         rasterize_fn = _rasterize_tile_jax_fn
+
+        # Compute global priority order if enabled
+        # This ensures adjacent tiles select the same "top K" gaussians
+        global_order = None
+        if use_global_priority:
+            global_order = jnp.argsort(-gaussians.opacity)
+
         hit_indices = get_intersects_per_patch(
             gaussians,
             tiles,
@@ -65,6 +92,8 @@ def rasterize(
             num_tiles,
             tile_size,
             max_intersects,
+            select_by_opacity=select_by_opacity,
+            global_order=global_order,
         )
 
         img_tiles = jax.vmap(
