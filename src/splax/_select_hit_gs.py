@@ -28,6 +28,7 @@ def get_intersects_per_patch(
     num_tiles: jdc.Static[int],
     tile_size: jdc.Static[int],
     max_intersects: jdc.Static[int],
+    select_by_opacity: jdc.Static[bool] = False,
 ) -> jnp.ndarray:
     if False and wp is not None and jax_kernel is not None:
         # Experimental; WIP heuristic for choosing the "best" gaussians to render,
@@ -43,7 +44,18 @@ def get_intersects_per_patch(
             tile_size,
             max_intersects,
         )
+    elif select_by_opacity:
+        # Opacity-based selection: prioritize high-opacity gaussians
+        intersects = jax.vmap(
+            lambda tile: _get_intersections_by_opacity(
+                gaussians,
+                depth,
+                tile,
+                max_intersects,
+            )
+        )(tiles)
     else:
+        # Default selection (array order)
         intersects = jax.vmap(
             lambda tile: _get_intersections_from_depth(
                 gaussians,
@@ -71,6 +83,53 @@ def _get_intersections_from_depth(
     in_bounds = jnp.logical_and(in_bounds, depth > 0)
 
     intersection = jnp.nonzero(in_bounds, size=max_intersects, fill_value=-1)[0]
+    return intersection
+
+
+def _get_intersections_by_opacity(
+    g2d: Gaussian2D,
+    depth: jnp.ndarray,
+    tile: jnp.ndarray,
+    max_intersects: jdc.Static[int],
+) -> jnp.ndarray:
+    """Select gaussians by opacity (highest opacity first), then sort by depth.
+
+    This prioritizes visually important gaussians over array order, while
+    maintaining proper alpha compositing order for rendering.
+    """
+    bbox = g2d.get_bbox()
+
+    # Compute in-bounds mask
+    in_bounds = jnp.logical_and(
+        jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
+        jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
+    )
+    in_bounds = jnp.logical_and(in_bounds, depth > 0)
+
+    # Sort by opacity (descending) - use negative opacity for ascending argsort
+    # For out-of-bounds gaussians, use -inf so they sort to the end
+    sort_key = jnp.where(in_bounds, -g2d.opacity, jnp.inf)
+    opacity_order = jnp.argsort(sort_key)
+
+    # Take top max_intersects by opacity
+    top_indices = opacity_order[:max_intersects]
+
+    # Filter to only in-bounds (mark out-of-bounds as -1)
+    intersection = jnp.where(
+        in_bounds[top_indices],
+        top_indices,
+        -1,
+    )
+
+    # Sort selected gaussians by depth for proper alpha compositing
+    sort_depths = jnp.where(
+        intersection >= 0,
+        depth[jnp.maximum(intersection, 0)],
+        jnp.inf,
+    )
+    sort_order = jnp.argsort(sort_depths)
+    intersection = intersection[sort_order]
+
     return intersection
 
 

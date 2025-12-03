@@ -72,7 +72,8 @@ def main(
 
         def rasterize_gs(gs):
             _gs_2d, depth = camera.project(gs)
-            img = rasterize(_gs_2d, depth, height, width)
+            # Use opacity-based selection for better handling of max_intersects limit
+            img = rasterize(_gs_2d, depth, height, width, select_by_opacity=True)
             return img
 
     else:

@@ -25,6 +25,7 @@ def rasterize(
     tile_size: jdc.Static[int] = 40,
     max_intersects: jdc.Static[int] = 100,
     mode: jdc.Static[Literal["jax", "warp"]] = "jax",
+    select_by_opacity: jdc.Static[bool] = False,
 ) -> jnp.ndarray:
     gaussians.verify_shape()
 
@@ -65,6 +66,7 @@ def rasterize(
             num_tiles,
             tile_size,
             max_intersects,
+            select_by_opacity=select_by_opacity,
         )
 
         img_tiles = jax.vmap(
