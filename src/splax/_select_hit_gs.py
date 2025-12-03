@@ -29,8 +29,21 @@ def get_intersects_per_patch(
     tile_size: jdc.Static[int],
     max_intersects: jdc.Static[int],
     select_by_opacity: jdc.Static[bool] = False,
+    global_order: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
-    if False and wp is not None and jax_kernel is not None:
+    if global_order is not None:
+        # Global priority selection: uses precomputed order for consistent
+        # gaussian selection across adjacent tiles
+        intersects = jax.vmap(
+            lambda tile: _get_intersections_by_global_priority(
+                gaussians,
+                depth,
+                tile,
+                max_intersects,
+                global_order,
+            )
+        )(tiles)
+    elif False and wp is not None and jax_kernel is not None:
         # Experimental; WIP heuristic for choosing the "best" gaussians to render,
         # such that there are no tile-level discontinuities even with `max_intersects`.
         # This actually fails for random init with `train_image.py`...
@@ -122,6 +135,62 @@ def _get_intersections_by_opacity(
     )
 
     # Sort selected gaussians by depth for proper alpha compositing
+    sort_depths = jnp.where(
+        intersection >= 0,
+        depth[jnp.maximum(intersection, 0)],
+        jnp.inf,
+    )
+    sort_order = jnp.argsort(sort_depths)
+    intersection = intersection[sort_order]
+
+    return intersection
+
+
+def _get_intersections_by_global_priority(
+    g2d: Gaussian2D,
+    depth: jnp.ndarray,
+    tile: jnp.ndarray,
+    max_intersects: jdc.Static[int],
+    global_order: jnp.ndarray,
+) -> jnp.ndarray:
+    """Select gaussians using precomputed global priority order.
+
+    This ensures adjacent tiles select the same "top K" gaussians from their
+    overlapping sets, eliminating tile-boundary inconsistencies.
+
+    Args:
+        g2d: 2D gaussians
+        depth: Depth values for each gaussian
+        tile: Tile bounds [x_min, y_min, x_max, y_max]
+        max_intersects: Maximum number of gaussians to select
+        global_order: Precomputed indices sorted by priority (highest first)
+
+    Returns:
+        Selected gaussian indices, sorted by depth for alpha compositing
+    """
+    bbox = g2d.get_bbox()
+
+    # Compute in-bounds mask (same as existing functions)
+    in_bounds = jnp.logical_and(
+        jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
+        jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
+    )
+    in_bounds = jnp.logical_and(in_bounds, depth > 0)
+
+    # Check which gaussians in global_order are in bounds for this tile
+    is_valid = in_bounds[global_order]
+
+    # Use cumsum to count valid entries and select first max_intersects
+    cumsum = jnp.cumsum(is_valid)
+    keep_mask = (cumsum <= max_intersects) & is_valid
+
+    # Extract indices where keep_mask is True, -1 elsewhere
+    # Then compact valid entries to front using sort trick
+    intersection = jnp.where(keep_mask, global_order, -1)
+    # Sort descending so -1s go to end, then take first max_intersects
+    intersection = jnp.sort(intersection)[::-1][:max_intersects]
+
+    # Re-sort by depth for proper alpha compositing
     sort_depths = jnp.where(
         intersection >= 0,
         depth[jnp.maximum(intersection, 0)],
