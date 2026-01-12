@@ -9,6 +9,39 @@ import jax.numpy as jnp
 from ._gaussian_splat import Gaussian2D, Gaussian3D
 
 
+def _eigh_2x2(cov: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Closed-form eigendecomposition for 2x2 symmetric matrices.
+
+    Much faster than jnp.linalg.eigh for 2x2 matrices.
+    """
+    a = cov[..., 0, 0]
+    b = cov[..., 0, 1]
+    c = cov[..., 1, 1]
+
+    # Eigenvalues from quadratic formula
+    trace = a + c
+    diff = a - c
+    disc = jnp.sqrt(diff**2 + 4*b**2 + 1e-12)
+
+    # Eigenvalues (smaller first to match eigh's ascending order)
+    lambda1 = (trace - disc) / 2
+    lambda2 = (trace + disc) / 2
+
+    # Eigenvector angle
+    theta = jnp.arctan2(2*b, diff + 1e-12) / 2
+    cos_t = jnp.cos(theta)
+    sin_t = jnp.sin(theta)
+
+    # Build rotation matrix (columns are eigenvectors)
+    Q = jnp.stack([
+        jnp.stack([cos_t, sin_t], axis=-1),
+        jnp.stack([-sin_t, cos_t], axis=-1)
+    ], axis=-1)
+
+    eigenvalues = jnp.stack([lambda1, lambda2], axis=-1)
+    return eigenvalues, Q
+
+
 @jdc.pytree_dataclass
 class Camera:
     fx: jnp.ndarray
@@ -140,7 +173,8 @@ class Camera:
         cov_d = cov_d.clip(-1e6, 1e6)
 
         # Store covariance as scale and quaternion.
-        scale, quat_d = jnp.linalg.eigh(cov_d)
+        # Use closed-form 2x2 eigendecomposition (faster than generic eigh)
+        scale, quat_d = _eigh_2x2(cov_d)
 
         # Clip scale to prevent spurious negative values.
         # Also, this is 2D scale, so <1 means less than 1 pixel!

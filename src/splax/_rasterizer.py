@@ -54,6 +54,17 @@ def rasterize(
     elif mode == "jax":
         assert max_intersects > 0
         rasterize_fn = _rasterize_tile_jax_fn
+
+        # Pre-compute cached values to avoid repeated exp()/sigmoid() calls
+        cached_means = gaussians.means
+        cached_colors = gaussians.colors  # triggers sigmoid() once
+        cached_opacity = gaussians.opacity  # triggers sigmoid() once
+        cached_quat_matrix = gaussians.quat.as_matrix()  # compute once
+        cached_scale_sq = gaussians.scale ** 2  # triggers exp() once
+
+        # Pre-compute bounding box once for all tiles
+        cached_bbox = gaussians.get_bbox()
+
         hit_indices = get_intersects_per_patch(
             gaussians,
             tiles,
@@ -65,11 +76,14 @@ def rasterize(
             num_tiles,
             tile_size,
             max_intersects,
+            bbox=cached_bbox,
         )
 
         img_tiles = jax.vmap(
             lambda tile, hit_idx: rasterize_fn(
-                gaussians, tile, tile_size, hit_idx
+                cached_means, cached_colors, cached_opacity,
+                cached_quat_matrix, cached_scale_sq,
+                tile, tile_size, hit_idx
             )
         )(tiles, hit_indices)
 
@@ -95,11 +109,16 @@ def rasterize(
 
 
 def _rasterize_tile_jax_fn(
-    g2d: Gaussian2D,
+    means: jnp.ndarray,
+    colors: jnp.ndarray,
+    opacity: jnp.ndarray,
+    quat_matrix: jnp.ndarray,
+    scale_sq: jnp.ndarray,
     tile: jnp.ndarray,
     tile_size: jdc.Static[int],
     intersection: jnp.ndarray,
 ) -> jnp.ndarray:
+    """Rasterize a single tile using fori_loop with unrolling."""
     indices = jnp.stack(
         jnp.meshgrid(
             jnp.arange(tile_size) + tile[0],
@@ -108,41 +127,47 @@ def _rasterize_tile_jax_fn(
         axis=-1,
     )
 
-    inv_covs = jnp.einsum(
+    # Extract only the intersecting gaussians' data
+    safe_intersection = jnp.clip(intersection, 0, means.shape[0] - 1)
+    local_means = means[safe_intersection]
+    local_colors = colors[safe_intersection]
+    local_opacity = opacity[safe_intersection]
+    local_quat_matrix = quat_matrix[safe_intersection]
+    local_scale_sq = scale_sq[safe_intersection]
+
+    # Compute inverse covariances only for intersecting gaussians (~100 instead of all)
+    local_inv_covs = jnp.einsum(
         "...ij,...j,...kj->...ik",
-        g2d.quat.as_matrix(),
-        1 / (g2d.scale**2),
-        g2d.quat.as_matrix(),
+        local_quat_matrix,
+        1 / local_scale_sq,
+        local_quat_matrix,
     )
 
-    def get_alpha_and_color(curr_idx):
-        mean = g2d.means[curr_idx]
-        color = g2d.colors[curr_idx]
-        opacity = g2d.opacity[curr_idx]
+    # Validity mask for intersection indices
+    valid_mask = intersection >= 0
+
+    def get_alpha_and_color(local_idx):
+        mean = local_means[local_idx]
+        color = local_colors[local_idx]
+        opac = local_opacity[local_idx]
         diff = indices - mean[None, None, :2]
         exponent = -0.5 * jnp.einsum(
-            "...j,...jk,...k->...", diff, inv_covs[curr_idx], diff
+            "...j,...jk,...k->...", diff, local_inv_covs[local_idx], diff
         )
-        _alpha = jnp.exp(exponent) * opacity
+        _alpha = jnp.exp(exponent) * opac
         return _alpha, color
 
-    # Rasterize all the selected gaussians in the tile.
-    # We use `fori_loop` combined with unroll.
-    # (We could also use `jax.lax.map` with batch_size=10.)
-
-    # This effectively performs the comment in the inspirational PR:
-    #   > After the Gaussians are sorted it seems possible to chunk them
-    #   > by distance, rasterize separately, and then alpha-composite?
-
-    # fori_loop implementation.
+    # fori_loop with unroll - better than vmap+cumprod because:
+    # - Constant memory (no allocation for all intermediate alphas)
+    # - Implicit early termination (trans→0 means contributions→0)
     def body_fn(i, state):
         img, alphas, trans = state
-        _alpha, _color = get_alpha_and_color(intersection[i])
+        _alpha, _color = get_alpha_and_color(i)
         img = img + (
             _color[..., None, None, :]
             * _alpha[..., None]
             * trans[..., None]
-            * (intersection[i] >= 0)[..., None, None, None]
+            * valid_mask[i][..., None, None, None]
         )
         alphas = alphas + _alpha
         trans = trans * (1 - _alpha)
@@ -159,17 +184,6 @@ def _rasterize_tile_jax_fn(
         ),
         unroll=10,
     )
-
-    # # For reference: vmap implementation.
-    # alphas, colors = jax.vmap(get_alpha_and_color)(intersection)
-    # trans = jnp.nancumprod(jnp.roll(1 - alphas, 1, axis=0).at[0].set(1.0), axis=0)
-    # img = jnp.sum(
-    #     colors[..., None, None, :]
-    #     * alphas[..., None]
-    #     * trans[..., None]
-    #     * (intersection >= 0)[..., None, None, None],
-    #     axis=0,
-    # )
 
     img = img.clip(0, 1)
     return img

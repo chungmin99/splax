@@ -28,6 +28,7 @@ def get_intersects_per_patch(
     num_tiles: jdc.Static[int],
     tile_size: jdc.Static[int],
     max_intersects: jdc.Static[int],
+    bbox: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     if False and wp is not None and jax_kernel is not None:
         # Experimental; WIP heuristic for choosing the "best" gaussians to render,
@@ -44,9 +45,12 @@ def get_intersects_per_patch(
             max_intersects,
         )
     else:
+        # Compute bbox once if not provided
+        if bbox is None:
+            bbox = gaussians.get_bbox()
         intersects = jax.vmap(
             lambda tile: _get_intersections_from_depth(
-                gaussians,
+                bbox,
                 depth,
                 tile,
                 max_intersects,
@@ -58,12 +62,11 @@ def get_intersects_per_patch(
 
 
 def _get_intersections_from_depth(
-    g2d: Gaussian2D,
+    bbox: jnp.ndarray,
     depth: jnp.ndarray,
     tile: jnp.ndarray,
     max_intersects: jdc.Static[int],
 ) -> jnp.ndarray:
-    bbox = g2d.get_bbox()
     in_bounds = jnp.logical_and(
         jnp.logical_and(bbox[:, 2] >= tile[0], bbox[:, 0] <= tile[2]),
         jnp.logical_and(bbox[:, 3] >= tile[1], bbox[:, 1] <= tile[3]),
